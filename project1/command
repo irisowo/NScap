@@ -1,0 +1,165 @@
+Build up 7 container, can be viewed by docker ps -a
+========================================================================
+sudo docker start r1
+sudo docker start r2
+sudo docker start h1
+sudo docker start h2
+sudo docker start BRG1
+sudo docker start BRG2
+sudo docker start BRGr
+
+sudo ip link add BRG1_h1 type veth peer name h1_BRG1
+sudo ip link add BRG2_h2 type veth peer name h2_BRG2
+sudo ip link add br0_BRG1 type veth peer name BRG1_br0
+sudo ip link add br0_BRG2 type veth peer name BRG2_br0
+sudo ip link add br0_r1 type veth peer name r1_br0
+
+sudo ip link set h1_BRG1 netns $(sudo docker inspect -f '{{.State.Pid}}' h1)
+sudo ip link set h2_BRG2 netns $(sudo docker inspect -f '{{.State.Pid}}' h2)
+sudo ip link set BRG1_h1 netns $(sudo docker inspect -f '{{.State.Pid}}' BRG1)
+sudo ip link set BRG2_h2 netns $(sudo docker inspect -f '{{.State.Pid}}' BRG2)
+sudo ip link set BRG1_br0 netns $(sudo docker inspect -f '{{.State.Pid}}' BRG1)
+sudo ip link set BRG2_br0 netns $(sudo docker inspect -f '{{.State.Pid}}' BRG2)
+sudo ip link set r1_br0 netns $(sudo docker inspect -f '{{.State.Pid}}' r1)
+
+sudo docker exec h1 ip link set h1_BRG1 up
+sudo docker exec h2 ip link set h2_BRG2 up
+sudo docker exec BRG1 ip link set BRG1_h1 up
+sudo docker exec BRG1 ip link set BRG1_br0 up
+sudo docker exec BRG2 ip link set BRG2_h2 up
+sudo docker exec BRG2 ip link set BRG2_br0 up
+sudo docker exec r1 ip link set r1_br0 up
+
+sudo brctl addbr br0
+sudo brctl addif br0 br0_BRG1
+sudo brctl addif br0 br0_BRG2
+sudo brctl addif br0 br0_r1
+sudo ip link set br0_BRG1 up
+sudo ip link set br0_BRG2 up
+sudo ip link set br0_r1 up
+sudo ip link set br0 up
+
+sudo ip link add r1_r2 type veth peer name r2_r1
+sudo ip link set r1_r2 netns $(sudo docker inspect -f '{{.State.Pid}}' r1)
+sudo ip link set r2_r1 netns $(sudo docker inspect -f '{{.State.Pid}}' r2)
+sudo docker exec r1 ip link set r1_r2 up
+sudo docker exec r1 ifconfig r1_r2 140.114.0.1 netmask 255.255.255.0 up
+sudo docker exec r2 ip link set r2_r1 up
+sudo docker exec r2 ifconfig r2_r1 140.114.0.2 netmask 255.255.255.0 up 
+
+sudo ip link add r2_BRGr type veth peer name BRGr_r2
+sudo ip link set r2_BRGr netns $(sudo docker inspect -f '{{.State.Pid}}' r2)
+sudo ip link set BRGr_r2 netns $(sudo docker inspect -f '{{.State.Pid}}' BRGr)
+sudo docker exec r2 ip link set r2_BRGr up
+sudo docker exec r2 ifconfig r2_BRGr 140.113.0.1 netmask 255.255.255.0 up
+sudo docker exec BRGr ip link set BRGr_r2 up
+sudo docker exec BRGr ifconfig BRGr_r2 140.113.0.2 netmask 255.255.255.0 up
+
+sudo ip link add BRGr_GWr type veth peer name GWr_BRGr
+sudo ip link set BRGr_GWr netns $(sudo docker inspect -f '{{.State.Pid}}' BRGr)
+sudo docker exec BRGr ip link set BRGr_GWr up
+sudo ip link set GWr_BRGr up
+========================================================================
+sudo sysctl net.ipv4.ip_forward=1
+sudo iptables -P FORWARD ACCEPT
+sudo modprobe fou
+
+sudo docker exec r1 ifconfig r1_br0 172.27.0.1 netmask 255.255.255.192 up
+sudo docker exec r1 /usr/sbin/dhcpd 4 -pf /run/dhcp-server-dhcpd.pid -cf /etc/dhcp/dhcpd.conf r1_br0 
+sudo docker exec BRG1 dhclient BRG1_br0
+sudo docker exec BRG2 dhclient BRG2_br0
+sudo docker exec r1 iptables -t nat -A POSTROUTING -s 172.27.0.0/26 -j MASQUERADE
+
+sudo docker exec BRG1 ip fou add port 1000 ipproto 47
+sudo docker exec BRG1 ip link add GRE_h1 type gretap remote 140.113.0.2 ikey 1 okey 1 encap fou encap-sport 1000 encap-dport 3000
+sudo docker exec BRG1 ip link set GRE_h1 up
+sudo docker exec BRG1 brctl addbr br0
+sudo docker exec BRG1 brctl addif br0 GRE_h1
+sudo docker exec BRG1 brctl addif br0 BRG1_h1
+sudo docker exec BRG1 ip link set br0 up
+
+sudo docker exec BRG2 ip fou add port 2000 ipproto 47
+sudo docker exec BRG2 ip link add GRE_h2 type gretap remote 140.113.0.2 ikey 2 okey 2 encap fou encap-sport 2000 encap-dport 4000
+sudo docker exec BRG2 ip link set GRE_h2 up
+sudo docker exec BRG2 brctl addbr br0
+sudo docker exec BRG2 brctl addif br0 GRE_h2 
+sudo docker exec BRG2 brctl addif br0 BRG2_h2
+sudo docker exec BRG2 ip link set br0 up
+
+sudo docker exec BRGr ip fou add port 3000 ipproto 47
+sudo docker exec BRGr ip fou add port 4000 ipproto 47
+=============================================================================
+
+sudo docker exec -it BRGr bash
+        ip link add GRE_h1 type gretap remote 140.114.0.1 ikey 1 okey 1 encap fou encap-sport 3000 encap-dport 1000
+	ip link set GRE_h1 up
+ 	brctl addbr br0
+	brctl addif br0 GRE_h1
+	brctl addif br0 BRGr_GWr
+	ip link set br0 up
+
+        ip link add GRE_h2 type gretap remote 140.114.0.1 ikey 2 okey 2 encap fou encap-sport 4000 encap-dport 2000
+	ip link set GRE_h2 up
+ 	brctl addbr br0
+	brctl addif br0 GRE_h2
+	brctl addif br0 BRGr_GWr
+	ip link set br0 up
+
+Check:
+    sudo docker exec r1 ip route
+        140.113.0.0/16 via 140.114.0.2 dev r1_r2
+        140.114.0.0/24 dev r1_r2 proto kernel scope link src 140.114.0.1 
+        172.27.0.0/26 dev r1_br0 proto kernel scope link src 172.27.0.1 
+    sudo docker exec r2 ip route
+        140.113.0.0/24 dev r2_BRGr proto kernel scope link src 140.113.0.1 
+        140.114.0.0/24 dev r2_r1 proto kernel scope link src 140.114.0.2  
+    sudo docker exec BRGr ip route
+        140.113.0.0/24 dev BRGr_r2 proto kernel scope link src 140.113.0.2
+        140.114.0.0/24 via 140.113.0.1 dev BRGr_r2 
+        (ex: sudo docker exec r2 ip route add 140.113.0.0/24 via 140.113.0.1)
+
+sudo vi /etc/default/isc-dhcp-server (modify IterfacesV4="GWr_BRGr")
+sudo vi /etc/dhcp/dhcpd.conf
+===========================================================================
+sudo docker exec r1 ip route add 140.113.0.0/16 via 140.114.0.2 dev r1_r2
+sudo docker exec BRGr ip route add 140.114.0.0/24 via 140.113.0.1 dev BRGr_r2 
+sudo ifconfig GWr_BRGr 20.0.0.1 netmask 255.0.0.0 up
+sudo /usr/sbin/dhcpd 4 -pf /run/dhcp-server-dhcpd.pid -cf /etc/dhcp/dhcpd.conf GWr_BRGr
+
+sudo docker exec BRGr ip link add br0 type bridge
+sudo docker exec BRGr brctl addif br0 BRGr_GWr
+sudo docker exec BRGr ip link set br0 up
+sudo g++ filter.cpp -lpcap
+sudo docker cp ./a.out f277bf0816b3:/
+sudo docker exec -it BRGr bash
+     ./a.out
+
+sudo docker exec h1 dhclient h1_BRG1
+sudo docker exec h2 dhclient h2_BRG2
+
+sudo docker exec h1 ip route add default via 20.0.0.1
+sudo docker exec h2 ip route add default via 20.0.0.1
+sudo ip route add 20.0.0.0/8 via 20.0.0.1 dev GWr_BRGr
+sudo iptables -t nat -A POSTROUTING -s 20.0.0.0/8 -j MASQUERADE
+sudo iptables -t nat -D POSTROUTING 1
+========================================================================
+Set Veth_xx steps:
+(1) sudo ip link add Veth_a type veth peer name Veth_b
+(2) sudo docker start a|b
+(3) sudo docker inspect -f '{{.State.Pid}}' a|b
+(4) sudo ip link set Veth_a|b netns PID(a|b)
+
+(5) sudo docker exec -it a/b bash
+(6) ip link set Veth_a up
+(7) ifconfig
+(8) quit bash without stop it ctrl-P + ctrl-Q
+
+dhcpd -user dhcpd -group dhcpd -f -4 -pf /run/dhcp-server/dhcpd.pid -cf /etc/dhcp/dhcpd.conf r1_br0
+------------------------------------------------------------------------
+sudo docker exec -it r1 bash
+    [vim /etc/default/isc-dhcp-server(modify interfacev4="r1_r0")]
+    [service isc-dhcp-server restart]
+------------------------------------------------------------------------
+sudo iptables -t nat -L -n -v
+sudo iptables -t nat -D POSTROUTING 2
+
